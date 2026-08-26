@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-dev-activity-scan.py — Yerel git aktivite tarayıcısı
+dev-activity-scan.py — local git activity scanner
 
-Bilgisayarındaki tüm git depolarını tarar, SENİN yazdığın commit'leri bulur ve
-tarih bazında toplar. Çıktı tamamen anonimdir:
+Walks every git repository on this machine, finds the commits YOU authored and
+aggregates them by date. The output is fully anonymous:
 
-  ÇIKAR : commit sayıları, tarihler, saatler, aktif gün sayısı, depo ADEDİ
-  ÇIKMAZ: depo adı, klasör yolu, commit mesajı, dosya adı, kod, branch adı
+  INCLUDED : commit counts, dates, hours, active-day count, NUMBER of repositories
+  EXCLUDED : repository names, folder paths, commit messages, file names, code,
+             branch names
 
-Kullanım
---------
-  # 1) Önce hangi e-postaların sana ait olduğunu gör:
+Usage
+-----
+  # 1) First, see which author e-mails exist in your repositories:
   python3 dev-activity-scan.py --list-emails ~/projects
 
-  # 2) Kendi e-postalarınla tara:
-  python3 dev-activity-scan.py --email sen@firma.com --email sen@gmail.com ~/projects
+  # 2) Scan with the e-mails that are yours:
+  python3 dev-activity-scan.py --email you@company.com --email you@gmail.com ~/projects
 
-  # Birden fazla klasör verebilirsin:
-  python3 dev-activity-scan.py --email sen@gmail.com ~/projects ~/Documents ~/work
+  # You can pass more than one root folder:
+  python3 dev-activity-scan.py --email you@gmail.com ~/projects ~/Documents ~/work
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ import sys
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-# Bu klasörlerin içine hiç girilmez (hız + gereksiz bağımlılık depoları)
+# Never descend into these (speed, and they are dependency trees, not your work)
 SKIP_DIRS = {
     "node_modules", "vendor", ".venv", "venv", "env", "__pycache__",
     ".cache", ".npm", ".nvm", ".gradle", ".m2", "target", "dist", "build",
@@ -40,11 +41,11 @@ SKIP_DIRS = {
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-# ---------------------------------------------------------------- repo bulma
+# ----------------------------------------------------------- finding repos
 
 def find_repos(roots: list[str], max_depth: int,
                exclude: list[str] | None = None) -> list[str]:
-    """Verilen kök klasörlerin altındaki tüm git depolarını bulur."""
+    """Find every git repository under the given root folders."""
     repos: list[str] = []
     seen: set[str] = set()
     skip = {os.path.realpath(os.path.expanduser(e)) for e in (exclude or [])}
@@ -52,7 +53,7 @@ def find_repos(roots: list[str], max_depth: int,
     for root in roots:
         root = os.path.abspath(os.path.expanduser(root))
         if not os.path.isdir(root):
-            print(f"  ! atlandı (klasör yok): {root}", file=sys.stderr)
+            print(f"  ! skipped (no such folder): {root}", file=sys.stderr)
             continue
 
         root_depth = root.rstrip(os.sep).count(os.sep)
@@ -63,7 +64,7 @@ def find_repos(roots: list[str], max_depth: int,
                 dirnames[:] = []
                 continue
 
-            # .git bir klasör (normal depo) veya dosya (worktree/submodule) olabilir
+            # .git is a folder in a normal repo, a file in a worktree/submodule
             if ".git" in dirnames or ".git" in filenames:
                 real = os.path.realpath(dirpath)
                 if any(real == x or real.startswith(x + os.sep) for x in skip):
@@ -72,7 +73,7 @@ def find_repos(roots: list[str], max_depth: int,
                 if real not in seen:
                     seen.add(real)
                     repos.append(dirpath)
-                # Deponun içine inmeye devam etme (submodule'ler hariç zaten --all ile gelir)
+                # Do not walk into the repo itself; submodules already arrive via --all
                 dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != ".git"]
                 continue
 
@@ -85,7 +86,7 @@ def find_repos(roots: list[str], max_depth: int,
 
 
 def git(repo: str, *args: str, timeout: int = 120) -> str:
-    """Depoda git komutu çalıştırır, hata olursa boş string döner."""
+    """Run a git command in the repo; return an empty string on any failure."""
     try:
         out = subprocess.run(
             ["git", "-C", repo, *args],
@@ -96,15 +97,15 @@ def git(repo: str, *args: str, timeout: int = 120) -> str:
     return out.stdout if out.returncode == 0 else ""
 
 
-# ------------------------------------------------------------ e-posta listesi
+# --------------------------------------------------------------- e-mail list
 
 def list_emails(repos: list[str]) -> None:
-    """Depolardaki tüm yazar e-postalarını commit sayısıyla listeler."""
+    """List every author e-mail found in the repositories, with commit counts."""
     counter: Counter[str] = Counter()
     names: dict[str, set[str]] = defaultdict(set)
 
     for i, repo in enumerate(repos, 1):
-        print(f"\r  taranıyor {i}/{len(repos)}", end="", file=sys.stderr)
+        print(f"\r  scanning {i}/{len(repos)}", end="", file=sys.stderr)
         log = git(repo, "log", "--all", "--pretty=format:%ae\t%an")
         for line in log.splitlines():
             if "\t" not in line:
@@ -116,26 +117,27 @@ def list_emails(repos: list[str]) -> None:
                 names[email].add(name.strip())
 
     print("\r" + " " * 40 + "\r", end="", file=sys.stderr)
-    print(f"\n{len(repos)} depoda bulunan yazarlar (commit sayısına göre):\n")
-    print(f"  {'COMMIT':>8}  {'E-POSTA':<44} İSİM")
+    print(f"\nAuthors found across {len(repos)} repositories (by commit count):\n")
+    print(f"  {'COMMITS':>8}  {'E-MAIL':<44} NAME")
     print(f"  {'-' * 8}  {'-' * 44} {'-' * 24}")
     for email, count in counter.most_common(60):
         who = ", ".join(sorted(names[email]))[:40]
         print(f"  {count:>8}  {email:<44} {who}")
-    print("\nSana ait olanları --email ile ver, örn:")
+    print("\nPass the ones that are yours with --email, e.g.:")
     top = [e for e, _ in counter.most_common(2)]
     print("  python3 dev-activity-scan.py " + " ".join(f"--email {e}" for e in top) + " ~/projects\n")
 
 
-# ---------------------------------------------------------------- toplama
+# ------------------------------------------------------------------ collect
 
 def collect(repos: list[str], emails: set[str], include_merges: bool) -> tuple[dict, int]:
-    """Commit'leri hash bazında tekilleştirerek toplar. (aynı depo iki yerde klonlanmışsa
-    veya fork'landıysa çift saymaz)"""
+    """Collect commits, de-duplicated by hash, so a repository cloned or forked
+    into two places is never counted twice."""
     seen_hashes: set[str] = set()
     stamps: list[datetime] = []
-    # Aynı depo birden fazla yere klonlanmış olabilir (yedek, alt modül, eski kopya).
-    # Kök commit'in hash'i depo kimliği olarak kullanılır; böylece depo sayısı şişmez.
+    # The same repository may exist in several places (backup, submodule, old copy).
+    # The root commit hash is used as the repository identity, so the repository
+    # count does not get inflated.
     repo_identities: set[str] = set()
 
     fmt = "--pretty=format:%H%x09%aI"
@@ -144,7 +146,7 @@ def collect(repos: list[str], emails: set[str], include_merges: bool) -> tuple[d
         base.append("--no-merges")
 
     for i, repo in enumerate(repos, 1):
-        print(f"\r  taranıyor {i}/{len(repos)}", end="", file=sys.stderr)
+        print(f"\r  scanning {i}/{len(repos)}", end="", file=sys.stderr)
         args = list(base)
         for e in emails:
             args += ["--author", e]
@@ -172,7 +174,7 @@ def collect(repos: list[str], emails: set[str], include_merges: bool) -> tuple[d
 
 
 def streaks(days: set[date]) -> tuple[int, int]:
-    """En uzun ve güncel kesintisiz gün serisi."""
+    """Longest and current run of consecutive active days."""
     if not days:
         return 0, 0
     ordered = sorted(days)
@@ -188,7 +190,7 @@ def streaks(days: set[date]) -> tuple[int, int]:
     running = 0
     cursor = today
     if cursor not in days:
-        cursor = today - timedelta(days=1)  # bugün henüz commit atmamış olabilir
+        cursor = today - timedelta(days=1)  # there may be no commit yet today
     while cursor in days:
         running += 1
         cursor -= timedelta(days=1)
@@ -249,37 +251,39 @@ def build(stamps: list[datetime], repo_count: int, emails: set[str]) -> dict:
     }
 
 
-# ---------------------------------------------------------------- main
+# --------------------------------------------------------------------- main
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Yerel git depolarından anonim aktivite özeti çıkarır.",
+        description="Produce an anonymous activity summary from local git repositories.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     p.add_argument("roots", nargs="*", default=["~/projects"],
-                   help="taranacak klasörler (varsayılan: ~/projects)")
+                   help="folders to scan (default: ~/projects)")
     p.add_argument("--email", action="append", default=[],
-                   help="sana ait e-posta (birden fazla kez verilebilir)")
+                   help="an e-mail address that is yours (may be given more than once)")
     p.add_argument("--list-emails", action="store_true",
-                   help="depolardaki tüm yazar e-postalarını listele ve çık")
-    p.add_argument("--out", default="activity.json", help="çıktı dosyası")
-    p.add_argument("--max-depth", type=int, default=6, help="klasör tarama derinliği")
+                   help="list every author e-mail found in the repositories and exit")
+    p.add_argument("--out", default="activity.json", help="output file")
+    p.add_argument("--max-depth", type=int, default=6, help="folder scan depth")
     p.add_argument("--exclude", action="append", default=[],
-                   help="taramaya girmeyecek klasör (birden fazla kez verilebilir). "
-                        "Yayın repo'sunu buraya ver, yoksa cron commit'leri kendini sayar.")
+                   help="folder to keep out of the scan (may be given more than once). "
+                        "Pass the publishing repo here, otherwise its own cron commits "
+                        "get counted as your activity.")
     p.add_argument("--include-merges", action="store_true",
-                   help="merge commit'lerini de say (varsayılan: sayma)")
+                   help="count merge commits as well (default: do not)")
     args = p.parse_args()
 
     roots = args.roots or ["~/projects"]
 
-    print(f"Depolar aranıyor: {', '.join(roots)}", file=sys.stderr)
+    print(f"Looking for repositories in: {', '.join(roots)}", file=sys.stderr)
     repos = find_repos(roots, args.max_depth, args.exclude)
-    print(f"  {len(repos)} git deposu bulundu", file=sys.stderr)
+    print(f"  found {len(repos)} git repositories", file=sys.stderr)
 
     if not repos:
-        print("Hiç git deposu bulunamadı. Doğru klasörü verdiğinden emin ol.", file=sys.stderr)
+        print("No git repositories found. Check that the folder you passed is right.",
+              file=sys.stderr)
         return 1
 
     if args.list_emails:
@@ -292,18 +296,18 @@ def main() -> int:
                              capture_output=True, text=True, check=False).stdout.strip()
         if cfg:
             emails = {cfg.lower()}
-            print(f"  --email verilmedi, git global ayarı kullanılıyor: {cfg}", file=sys.stderr)
+            print(f"  no --email given, using the global git setting: {cfg}", file=sys.stderr)
         else:
-            print("E-posta belirtilmedi. Önce --list-emails ile bak, sonra --email ile ver.",
+            print("No e-mail given. Run --list-emails first, then pass --email.",
                   file=sys.stderr)
             return 1
 
-    print(f"  aranan kimlikler: {', '.join(sorted(emails))}", file=sys.stderr)
+    print(f"  identities searched for: {', '.join(sorted(emails))}", file=sys.stderr)
     data, repo_count = collect(repos, emails, args.include_merges)
     stamps = data["stamps"]
 
     if not stamps:
-        print("Bu e-postalarla hiç commit bulunamadı. --list-emails ile kontrol et.",
+        print("No commits found for these e-mails. Check them with --list-emails.",
               file=sys.stderr)
         return 1
 
@@ -314,15 +318,15 @@ def main() -> int:
 
     t = result["totals"]
     print(f"""
-  Toplam commit      : {t['commits']:,}
-  Aktif gün          : {t['active_days']:,}
-  Depo sayısı        : {t['repositories']:,}
-  İlk / son commit   : {t['first_commit']} → {t['last_commit']}  ({t['span_years']} yıl)
-  En uzun seri       : {result['streaks']['longest_days']} gün
-  Son 12 ay          : {result['last_365']['commits']:,} commit / {result['last_365']['active_days']} aktif gün
+  Total commits      : {t['commits']:,}
+  Active days        : {t['active_days']:,}
+  Repositories       : {t['repositories']:,}
+  First / last commit: {t['first_commit']} -> {t['last_commit']}  ({t['span_years']} years)
+  Longest streak     : {result['streaks']['longest_days']} days
+  Last 12 months     : {result['last_365']['commits']:,} commits / {result['last_365']['active_days']} active days
 
-  Yazıldı: {os.path.abspath(args.out)}
-""".replace(",", "."), file=sys.stderr)
+  Written to: {os.path.abspath(args.out)}
+""", file=sys.stderr)
 
     return 0
 
