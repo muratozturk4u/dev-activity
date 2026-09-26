@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-25T12:03:29+00:00",
+  "generated_at": "2026-09-26T23:17:10+00:00",
   "source": "local git repositories",
   "identity_count": 3,
   "totals": {
@@ -13,7 +13,7 @@
   },
   "streaks": {
     "longest_days": 21,
-    "current_days": 5
+    "current_days": 0
   },
   "last_365": {
     "commits": 2911,
